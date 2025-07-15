@@ -1,11 +1,13 @@
-
 import logging
 import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
-from telegram.ext import Updater, CommandHandler, CallbackContext, CallbackQueryHandler, Filters, MessageHandler
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, ContextTypes,
+    CallbackQueryHandler, MessageHandler, filters
+)
 from telegram.error import BadRequest
 
-# Use environment variable or fallback token (hardcoded)
+# Bot token from environment or fallback
 BOT_TOKEN = os.environ.get('BOT_TOKEN', '7685134552:AAH_qlJp65O9w7Vkzq74J_w6BmoJWguuWrY')
 
 logging.basicConfig(level=logging.INFO)
@@ -13,22 +15,22 @@ logger = logging.getLogger(__name__)
 
 user_warnings = {}
 
-def is_admin(user_id, chat):
-    member = chat.get_member(user_id)
+async def is_admin(user_id, chat):
+    member = await chat.get_member(user_id)
     return member.status in ['administrator', 'creator']
 
-def start(update: Update, context: CallbackContext):
-    update.message.reply_text("👋 Welcome to the Admin Bot!\nUse /panel in group to manage users easily.")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 Welcome to the Admin Bot!\nUse /panel in group to manage users easily.")
 
-def panel(update: Update, context: CallbackContext):
+async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     user = update.effective_user
 
     if chat.type != 'supergroup':
-        return update.message.reply_text("ℹ️ This command only works in supergroups.")
+        return await update.message.reply_text("ℹ️ This command only works in supergroups.")
 
-    if not is_admin(user.id, chat):
-        return update.message.reply_text("🚫 You must be an admin to use this.")
+    if not await is_admin(user.id, chat):
+        return await update.message.reply_text("🚫 You must be an admin to use this.")
 
     buttons = [
         [InlineKeyboardButton("🚫 Ban", callback_data="ban"),
@@ -38,49 +40,40 @@ def panel(update: Update, context: CallbackContext):
         [InlineKeyboardButton("⚠️ Warn", callback_data="warn"),
          InlineKeyboardButton("📊 Stats", callback_data="stats")]
     ]
-    update.message.reply_text("🔧 *Admin Panel*\nReply to a user's message and choose an action:",
-                              reply_markup=InlineKeyboardMarkup(buttons), parse_mode="Markdown")
+    await update.message.reply_text(
+        "🔧 *Admin Panel*\nReply to a user's message and choose an action:",
+        reply_markup=InlineKeyboardMarkup(buttons),
+        parse_mode="Markdown"
+    )
 
-def handle_buttons(update: Update, context: CallbackContext):
+async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    user = query.from_user
-    chat = update.effective_chat
-
-    query.answer()
+    await query.answer()
     context.user_data['last_action'] = query.data
-    query.edit_message_text(f"✅ Now reply to a message to perform: *{query.data.upper()}*", parse_mode="Markdown")
+    await query.edit_message_text(f"✅ Now reply to a message to perform: *{query.data.upper()}*", parse_mode="Markdown")
 
-def handle_reply(update: Update, context: CallbackContext):
+async def handle_reply(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat = update.effective_chat
     admin = update.effective_user
     replied_user = update.message.reply_to_message.from_user
     target_id = replied_user.id
     action = context.user_data.get('last_action')
 
-    if not is_admin(admin.id, chat):
-        return update.message.reply_text("🚫 Admins only!")
+    if not await is_admin(admin.id, chat):
+        return await update.message.reply_text("🚫 Admins only!")
 
-    if action == "ban":
-        try:
-            chat.kick_member(target_id)
-            update.message.reply_text(f"🚫 Banned {replied_user.full_name}")
-        except BadRequest:
-            update.message.reply_text("❌ Cannot ban this user.")
-    elif action == "kick":
-        try:
-            chat.unban_member(target_id)
-            update.message.reply_text(f"👢 Kicked {replied_user.full_name}")
-        except BadRequest:
-            update.message.reply_text("❌ Cannot kick this user.")
-    elif action == "mute":
-        try:
-            chat.restrict_member(user_id=target_id, permissions=ChatPermissions(can_send_messages=False))
-            update.message.reply_text(f"🔇 Muted {replied_user.full_name}")
-        except BadRequest:
-            update.message.reply_text("❌ Cannot mute.")
-    elif action == "unmute":
-        try:
-            chat.restrict_member(
+    try:
+        if action == "ban":
+            await chat.ban_member(target_id)
+            await update.message.reply_text(f"🚫 Banned {replied_user.full_name}")
+        elif action == "kick":
+            await chat.unban_member(target_id)
+            await update.message.reply_text(f"👢 Kicked {replied_user.full_name}")
+        elif action == "mute":
+            await chat.restrict_member(user_id=target_id, permissions=ChatPermissions(can_send_messages=False))
+            await update.message.reply_text(f"🔇 Muted {replied_user.full_name}")
+        elif action == "unmute":
+            await chat.restrict_member(
                 user_id=target_id,
                 permissions=ChatPermissions(
                     can_send_messages=True,
@@ -89,44 +82,42 @@ def handle_reply(update: Update, context: CallbackContext):
                     can_add_web_page_previews=True
                 )
             )
-            update.message.reply_text(f"🔊 Unmuted {replied_user.full_name}")
-        except BadRequest:
-            update.message.reply_text("❌ Cannot unmute.")
-    elif action == "warn":
-        count = user_warnings.get(target_id, 0) + 1
-        user_warnings[target_id] = count
-        update.message.reply_text(f"⚠️ Warned {replied_user.full_name} ({count}/3)")
-        if count >= 3:
-            try:
-                chat.kick_member(target_id)
-                update.message.reply_text(f"🚫 Auto-banned {replied_user.full_name} for 3 warnings.")
+            await update.message.reply_text(f"🔊 Unmuted {replied_user.full_name}")
+        elif action == "warn":
+            count = user_warnings.get(target_id, 0) + 1
+            user_warnings[target_id] = count
+            await update.message.reply_text(f"⚠️ Warned {replied_user.full_name} ({count}/3)")
+            if count >= 3:
+                await chat.ban_member(target_id)
+                await update.message.reply_text(f"🚫 Auto-banned {replied_user.full_name} for 3 warnings.")
                 user_warnings[target_id] = 0
-            except BadRequest:
-                update.message.reply_text("❌ Cannot auto-ban.")
-    elif action == "stats":
-        count = user_warnings.get(target_id, 0)
-        update.message.reply_text(f"📊 {replied_user.full_name} has {count} warning(s).")
-    else:
-        update.message.reply_text("❗ Unknown action. Use /panel first.")
+        elif action == "stats":
+            count = user_warnings.get(target_id, 0)
+            await update.message.reply_text(f"📊 {replied_user.full_name} has {count} warning(s).")
+        else:
+            await update.message.reply_text("❗ Unknown action. Use /panel first.")
+    except BadRequest as e:
+        await update.message.reply_text(f"❌ Error: {e.message}")
 
-def main():
-    updater = Updater(BOT_TOKEN, use_context=True)
-    dp = updater.dispatcher
+async def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("panel", panel))
-    dp.add_handler(CallbackQueryHandler(handle_buttons))
-    dp.add_handler(MessageHandler(Filters.reply & Filters.text & Filters.group, handle_reply))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("panel", panel))
+    app.add_handler(CallbackQueryHandler(handle_buttons))
+    app.add_handler(MessageHandler(filters.REPLY & filters.TEXT & filters.ChatType.GROUPS, handle_reply))
 
-    # Webhook (for Render)
+    # Webhook setup for Render
     PORT = int(os.environ.get('PORT', 8443))
-    updater.start_webhook(
-        listen='0.0.0.0',
+    await app.start()
+    await app.updater.start_webhook(
+        listen="0.0.0.0",
         port=PORT,
-        url_path=BOT_TOKEN
+        url_path=BOT_TOKEN,
+        webhook_url=f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/{BOT_TOKEN}"
     )
-    updater.bot.set_webhook(f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/{BOT_TOKEN}")
-    updater.idle()
+    await app.updater.idle()
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
